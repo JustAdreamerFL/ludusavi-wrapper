@@ -4,6 +4,8 @@ A universal wrapper script for automatic game save backup and restore using [Lud
 
 When paired with something like syncthing, you basically get a system like Steam Cloud Saves
 
+currently tested only on linux system
+
 ## Features
 
 - **Multi-launcher support**: Works with Lutris, Heroic, and other game launchers
