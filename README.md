@@ -24,7 +24,7 @@ A universal wrapper script for automatic game save backup and restore using [Lud
 
 1. Download the script:
 ```bash
-wget https://raw.githubusercontent.com/YOUR_USERNAME/ludusavi-wrapper/main/ludusavi_universal_wrapper.sh
+wget https://raw.githubusercontent.com/JustAdreamerFL/ludusavi-wrapper/main/ludusavi_universal_wrapper.sh
 chmod +x ludusavi_universal_wrapper.sh
 ```
 
