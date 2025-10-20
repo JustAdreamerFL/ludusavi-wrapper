@@ -1,30 +1,61 @@
 #!/usr/bin/env bash
+
+# ============================================================================
+# Ludusavi Universal Wrapper
+# ============================================================================
+# A cross-platform wrapper for automatic game save backup and restore
+# Works with Lutris, Heroic Launcher, and other game launchers
+# Supports Linux and macOS
+#
+# Features:
+# - Auto-detects game names from launcher environment variables
+# - Backs up saves before and after game sessions
+# - Checks Syncthing sync status before launching
+# - Updates ludusavi manifest when network is available
+# - Triggers Syncthing rescan after backup
+# ============================================================================
+
+# Debug logging
 echo "[$(date)] Running $0 as $USER in $PWD with args: $@" >> /tmp/ludusavi_wrapper_debug.log
 env >> /tmp/ludusavi_wrapper_debug.log
+
+# Exit on error, undefined variables, and pipe failures
 set -euo pipefail
 
-# Universal Ludusavi wrapper for any game launcher (Lutris, Heroic, etc.)
-# Use this as the game executable in your launcher settings for any game
-# The game name is automatically detected from various sources
-
 # ============================================================================
-# CONFIGURATION - Edit these paths for your system
+# CONFIGURATION
 # ============================================================================
 
-# Ludusavi executable path - will auto-detect if not set or if file doesn't exist
+# Ludusavi executable path (auto-detected if not set)
 LUDUSAVI="${LUDUSAVI_PATH:-}"
-
-# Cache file to store detected ludusavi path
-CACHE_FILE="${XDG_CACHE_HOME:-$HOME/.cache}/ludusavi_wrapper_path"
-PING_CACHE_FILE="${XDG_CACHE_HOME:-$HOME/.cache}/ludusavi_wrapper_ping_cmd"
 
 # Launcher type detection (auto-detected if not set)
 # Options: "lutris", "heroic", "auto"
 LAUNCHER_TYPE="${LAUNCHER_TYPE:-auto}"
 
 # ============================================================================
-# Auto-detect ludusavi if not configured or path doesn't exist
+# CACHE DIRECTORY SETUP
 # ============================================================================
+
+# Determine cache directory based on platform
+if [[ -n "${XDG_CACHE_HOME:-}" ]]; then
+  # Use XDG standard if available
+  CACHE_DIR="${XDG_CACHE_HOME}"
+elif [[ -d "$HOME/Library/Caches" ]]; then
+  # macOS standard location
+  CACHE_DIR="$HOME/Library/Caches/ludusavi-wrapper"
+else
+  # Linux fallback
+  CACHE_DIR="$HOME/.cache"
+fi
+
+CACHE_FILE="${CACHE_DIR}/ludusavi_wrapper_path"
+PING_CACHE_FILE="${CACHE_DIR}/ludusavi_wrapper_ping_cmd"
+
+# ============================================================================
+# LUDUSAVI AUTO-DETECTION
+# ============================================================================
+
 if [[ -z "${LUDUSAVI}" ]] || [[ ! -x "${LUDUSAVI}" ]]; then
   # Try to load from cache first
   if [[ -f "${CACHE_FILE}" ]]; then
@@ -38,14 +69,15 @@ if [[ -z "${LUDUSAVI}" ]] || [[ ! -x "${LUDUSAVI}" ]]; then
   if [[ -z "${LUDUSAVI}" ]] || [[ ! -x "${LUDUSAVI}" ]]; then
     echo "Auto-detecting ludusavi location..." >&2
     
-    # Try common locations
+    # Common installation paths (prioritized by likelihood)
+    # Order: Homebrew (Intel Mac), Homebrew (Apple Silicon), standard Linux paths
     LUDUSAVI_CANDIDATES=(
-      "/usr/bin/ludusavi"
       "/usr/local/bin/ludusavi"
+      "/opt/homebrew/bin/ludusavi"
+      "/usr/bin/ludusavi"
       "$HOME/.local/bin/ludusavi"
       "$HOME/.cargo/bin/ludusavi"
-      "/opt/homebrew/bin/ludusavi"
-      "$(which ludusavi 2>/dev/null || echo '')"
+      "$(command -v ludusavi 2>/dev/null || echo '')"
     )
     
     for candidate in "${LUDUSAVI_CANDIDATES[@]}"; do
@@ -53,7 +85,7 @@ if [[ -z "${LUDUSAVI}" ]] || [[ ! -x "${LUDUSAVI}" ]]; then
         LUDUSAVI="${candidate}"
         echo "Found ludusavi at: ${LUDUSAVI}" >&2
         
-        # Cache the found path
+        # Cache the found path for future runs
         mkdir -p "$(dirname "${CACHE_FILE}")"
         echo "${LUDUSAVI}" > "${CACHE_FILE}"
         echo "Cached path for future use" >&2
@@ -61,7 +93,7 @@ if [[ -z "${LUDUSAVI}" ]] || [[ ! -x "${LUDUSAVI}" ]]; then
       fi
     done
     
-    # If not found as native binary, check for Flatpak
+    # Check for Flatpak installation (Linux)
     if [[ -z "${LUDUSAVI}" ]] || [[ ! -x "${LUDUSAVI}" ]]; then
       if command -v flatpak >/dev/null 2>&1 && flatpak list --app | grep -q "com.github.mtkennerly.ludusavi"; then
         LUDUSAVI="flatpak run com.github.mtkennerly.ludusavi"
@@ -74,6 +106,7 @@ if [[ -z "${LUDUSAVI}" ]] || [[ ! -x "${LUDUSAVI}" ]]; then
       fi
     fi
     
+    # Exit if ludusavi not found
     if [[ -z "${LUDUSAVI}" ]]; then
       echo "Error: ludusavi not found!" >&2
       echo "Please install ludusavi or set LUDUSAVI_PATH environment variable" >&2
@@ -84,12 +117,14 @@ if [[ -z "${LUDUSAVI}" ]] || [[ ! -x "${LUDUSAVI}" ]]; then
   fi
 fi
 
-# The actual game executable should be passed as arguments
-
+# ============================================================================
+# COMMAND-LINE ARGUMENT PARSING
+# ============================================================================
 
 # Mode selection: wrapper (default), pre, post
 MODE="wrapper"
 GAME_NAME_ARG=""
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --mode=*)
@@ -106,27 +141,20 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# In wrapper mode, require a game executable
+# Validate that wrapper mode has a game executable
 if [[ "$MODE" == "wrapper" && $# -eq 0 ]]; then
   echo "Error: No game executable specified" >&2
-  echo "Usage: This script should wrap the actual game command" >&2
-  exit 2
-fi
-
-# In wrapper mode, require a game executable
-if [[ "$MODE" == "wrapper" && $# -eq 0 ]]; then
-  echo "Error: No game executable specified" >&2
-  echo "Usage: This script should wrap the actual game command" >&2
+  echo "Usage: $0 [--mode=wrapper|pre|post] [--game-name=NAME] <game_executable> [args...]" >&2
   exit 2
 fi
 
 # ============================================================================
-# Detect game name from launcher environment variables
+# LAUNCHER & GAME NAME DETECTION
 # ============================================================================
 
 GAME_NAME=""
 
-# Auto-detect launcher type if set to auto
+# Auto-detect launcher type from environment variables
 if [[ "${LAUNCHER_TYPE}" == "auto" ]]; then
   if [[ -n "${LUTRIS_GAME_NAME:-}" ]] || [[ -n "${LUTRIS_GAME_ID:-}" ]]; then
     LAUNCHER_TYPE="lutris"
@@ -137,27 +165,26 @@ if [[ "${LAUNCHER_TYPE}" == "auto" ]]; then
   fi
 fi
 
-# Try Lutris environment variables
+# Extract game name from various sources (priority order)
+# 1. Command-line argument
 if [[ -n "${GAME_NAME_ARG}" ]]; then
   GAME_NAME="${GAME_NAME_ARG}"
+
+# 2. Lutris environment variables
 elif [[ "${LAUNCHER_TYPE}" == "lutris" ]]; then
   GAME_NAME="${LUTRIS_GAME_NAME:-}"
-  # Fall back to LUTRIS_GAME_ID if LUTRIS_GAME_NAME is not set
   if [[ -z "${GAME_NAME}" ]]; then
     GAME_NAME="${LUTRIS_GAME_ID:-}"
   fi
-fi
 
-# Try Heroic environment variables
-if [[ "${LAUNCHER_TYPE}" == "heroic" ]]; then
+# 3. Heroic environment variables
+elif [[ "${LAUNCHER_TYPE}" == "heroic" ]]; then
   GAME_NAME="${HEROIC_GAMES_LAUNCHER_GAME_TITLE:-}"
   
-  # If HEROIC_APP_NAME is set but looks like an ID (contains letters/numbers mix), 
-  # extract from path instead
+  # Check if HEROIC_APP_NAME looks like an ID (alphanumeric hash)
   if [[ -z "${GAME_NAME}" ]] && [[ -n "${HEROIC_APP_NAME:-}" ]]; then
-    # Check if it looks like an app ID (alphanumeric hash)
     if [[ "${HEROIC_APP_NAME}" =~ ^[a-zA-Z0-9]{20,}$ ]]; then
-      # It's probably an ID, extract from path instead
+      # It's an ID, skip it
       GAME_NAME=""
     else
       GAME_NAME="${HEROIC_APP_NAME}"
@@ -165,32 +192,33 @@ if [[ "${LAUNCHER_TYPE}" == "heroic" ]]; then
   fi
 fi
 
-# If we still don't have a useful game name, extract it from the executable path or working directory
+# 4. Extract from executable path or working directory
 if [[ -z "${GAME_NAME}" ]]; then
   if [[ "$MODE" == "wrapper" && $# -gt 0 ]]; then
-    # Get the first argument (the executable path)
     game_exe="$1"
-    # Try to extract game name from .app bundle (macOS)
+    
+    # Try to extract from macOS .app bundle
     if [[ "$game_exe" =~ /([^/]+)\.app/Contents/ ]]; then
       GAME_NAME="${BASH_REMATCH[1]}"
     else
-      # Fall back to executable filename without extension
-      GAME_NAME=$(basename "$game_exe" | sed 's/\.[^.]*$//')
+      # Use executable filename without extension
+      GAME_NAME=$(basename "$game_exe")
+      GAME_NAME="${GAME_NAME%.*}"
     fi
     echo "Detected game name from path: ${GAME_NAME}" >&2
+    
   else
-    # Fallback: use last directory in $PWD, but skip common subdirs like bin, x64, x86, etc.
+    # Fallback: use current directory name, skipping common subdirectories
     current_dir=$(basename "$PWD")
     
-    # List of common subdirectories to skip
+    # Skip common game subdirectories (bin, x64, lib, etc.)
     if [[ "$current_dir" =~ ^(bin|x64|x86|x86_64|i386|i686|amd64|lib|lib64|lib32|data|game)$ ]]; then
-      # Go up one or more directories to find the actual game name
       parent_dir=$(basename "$(dirname "$PWD")")
+      
       if [[ "$parent_dir" =~ ^(bin|x64|x86|x86_64|i386|i686|amd64|lib|lib64|lib32|data|game)$ ]]; then
-        # Go up one more level
         grandparent_dir=$(basename "$(dirname "$(dirname "$PWD")")")
+        
         if [[ "$grandparent_dir" =~ ^(bin|x64|x86|x86_64|i386|i686|amd64|lib|lib64|lib32|data|game)$ ]]; then
-          # Go up one more level (last resort)
           GAME_NAME=$(basename "$(dirname "$(dirname "$(dirname "$PWD")")")")
         else
           GAME_NAME="$grandparent_dir"
@@ -206,6 +234,9 @@ if [[ -z "${GAME_NAME}" ]]; then
   fi
 fi
 
+# ============================================================================
+# DISPLAY SESSION INFORMATION
+# ============================================================================
 
 echo "========================================"
 echo "Ludusavi Wrapper for ${GAME_NAME}"
@@ -228,13 +259,16 @@ echo "========================================"
 echo ""
 
 # ============================================================================
-# Find stc (Syncthing CLI) executable
+# SYNCTHING CLI (stc) AUTO-DETECTION
 # ============================================================================
+
 STC_CMD=""
+
 if command -v stc >/dev/null 2>&1; then
   STC_CMD="stc"
 else
-  # Try common locations where stc might be installed
+  # Search common installation paths
+  # Order: user Go bin, user local, Homebrew (both variants), system
   STC_CANDIDATES=(
     "$HOME/go/bin/stc"
     "$HOME/.local/bin/stc"
@@ -252,29 +286,39 @@ else
 fi
 
 # ============================================================================
-# Check Syncthing sync status
+# SYNCTHING SYNC STATUS CHECK
 # ============================================================================
+
 echo "Checking Syncthing sync status for ludusavi_server folder..." >&2
 
 SYNC_CHECK_COMPLETE=false
 SYNC_PERCENTAGE=0
 
-# Try to get sync status using stc json_dump
 if [[ -n "${STC_CMD}" ]]; then
+  # Try JSON API first (more reliable)
   if stc_output=$("${STC_CMD}" json_dump 2>/dev/null); then
     # Parse JSON for ludusavi_server folder sync percentage
-    SYNC_PERCENTAGE=$(echo "${stc_output}" | grep -o '"folderName":"ludusavi_server"[^}]*' | grep -o '"syncPercentDone":[0-9]*' | grep -o '[0-9]*' || echo "0")
+    # grep -o is compatible with both GNU (Linux) and BSD (macOS) grep
+    SYNC_PERCENTAGE=$(echo "${stc_output}" | \
+      grep -o '"folderName":"ludusavi_server"[^}]*' | \
+      grep -o '"syncPercentDone":[0-9]*' | \
+      grep -o '[0-9]*' | \
+      head -1 || echo "0")
+    
     if [[ -n "${SYNC_PERCENTAGE}" ]]; then
       SYNC_CHECK_COMPLETE=true
       echo "Syncthing sync status: ${SYNC_PERCENTAGE}%" >&2
     fi
   fi
   
-  # Fallback to stc status if json_dump didn't work
+  # Fallback to text-based status command
   if [[ "${SYNC_CHECK_COMPLETE}" == "false" ]]; then
     if stc_output=$("${STC_CMD}" status ludusavi_server 2>/dev/null); then
-      # Parse text output for sync percentage
-      SYNC_PERCENTAGE=$(echo "${stc_output}" | grep "ludusavi_server" | awk '{print $3}' | sed 's/%//' || echo "0")
+      SYNC_PERCENTAGE=$(echo "${stc_output}" | \
+        grep "ludusavi_server" | \
+        awk '{print $3}' | \
+        sed 's/%//' || echo "0")
+      
       if [[ -n "${SYNC_PERCENTAGE}" && "${SYNC_PERCENTAGE}" != "0" ]]; then
         SYNC_CHECK_COMPLETE=true
         echo "Syncthing sync status: ${SYNC_PERCENTAGE}%" >&2
@@ -282,29 +326,29 @@ if [[ -n "${STC_CMD}" ]]; then
     fi
   fi
   
-  # If sync is not 100%, show GUI warning
+  # Show GUI warning if not fully synced
   if [[ "${SYNC_CHECK_COMPLETE}" == "true" && "${SYNC_PERCENTAGE}" != "100" ]]; then
     WARNING_MSG="WARNING: Syncthing folder is not fully synced!\n\nCurrent sync: ${SYNC_PERCENTAGE}%\nGame: ${GAME_NAME}\n\nThe game will run, but your saves may not be up to date.\n\nWait for sync to complete before continuing?"
+    
     echo "WARNING: Syncthing folder is not fully synced (${SYNC_PERCENTAGE}%)!" >&2
     echo "Game will run anyway, but saves may not be up to date." >&2
     
-    # Try to show GUI notification - macOS (osascript)
+    # Try to show GUI notification based on available tools
     if command -v osascript >/dev/null 2>&1; then
-      # Use osascript to show a dialog with timeout and non-blocking behavior
-      # This will show for 10 seconds or until user clicks OK
+      # macOS: AppleScript dialog (10 second timeout)
       osascript -e "display dialog \"${WARNING_MSG}\" buttons {\"Continue Anyway\"} default button 1 with icon caution with title \"Ludusavi Sync Warning\" giving up after 10" >/dev/null 2>&1 &
-    # Try notify-send for Linux
     elif command -v notify-send >/dev/null 2>&1; then
+      # Linux: notify-send (desktop notification)
       notify-send -u critical -t 10000 "Ludusavi Sync Warning" "Syncthing not synced (${SYNC_PERCENTAGE}%)!\nGame: ${GAME_NAME}\n\nSaves may not be up to date." >/dev/null 2>&1 &
-    # Try zenity for Linux
     elif command -v zenity >/dev/null 2>&1; then
+      # Linux: Zenity dialog
       (zenity --warning --text="${WARNING_MSG}" --title="Ludusavi Sync Warning" --timeout=10 >/dev/null 2>&1) &
-    # Try kdialog for KDE
     elif command -v kdialog >/dev/null 2>&1; then
+      # Linux KDE: KDialog
       (kdialog --sorry "${WARNING_MSG}" --title "Ludusavi Sync Warning" >/dev/null 2>&1) &
     fi
     
-    # Wait a brief moment to ensure the GUI dialog appears before continuing
+    # Wait briefly to ensure dialog appears
     sleep 1
   fi
 else
@@ -313,35 +357,62 @@ fi
 
 echo ""
 
-# Quick network check (0.5 second timeout)
-# If we can reach a DNS server, we probably have internet
-MANIFEST_UPDATE_FLAG=""
+# ============================================================================
+# NETWORK CONNECTIVITY CHECK
+# ============================================================================
 
-# Try to load cached ping command
+MANIFEST_UPDATE_FLAG=""
 PING_CMD=""
+
+# Load cached ping command if available
 if [[ -f "${PING_CACHE_FILE}" ]]; then
   PING_CMD=$(cat "${PING_CACHE_FILE}" 2>/dev/null)
 fi
 
-# If no cached command or cache is invalid, detect which ping flag the system uses
+# Detect appropriate ping timeout flag for cross-platform compatibility
+# Different systems interpret ping timeout flags differently:
+# - macOS/BSD: -W is milliseconds
+# - Linux iputils: -W is seconds
+# - BusyBox: -w is milliseconds
 if [[ -z "${PING_CMD}" ]]; then
-  if ping -c 1 -W 0.5 127.0.0.1 >/dev/null 2>&1; then
-    # System uses -W flag (most Linux)
-    PING_CMD="ping -c 1 -W 0.5 8.8.8.8"
-  elif ping -c 1 -w 500 127.0.0.1 >/dev/null 2>&1; then
-    # System uses -w flag with milliseconds (some Linux variants)
-    PING_CMD="ping -c 1 -w 500 8.8.8.8"
+  if ping -c 1 -W 100 127.0.0.1 >/dev/null 2>&1; then
+    # macOS/BSD: -W in milliseconds (use 300ms for speed)
+    PING_CMD="ping -c 1 -W 300"
+  elif ping -c 1 -W 1 127.0.0.1 >/dev/null 2>&1; then
+    # Linux iputils: -W in seconds (1s minimum)
+    PING_CMD="ping -c 1 -W 1"
+  elif ping -c 1 -w 300 127.0.0.1 >/dev/null 2>&1; then
+    # BusyBox: -w in milliseconds
+    PING_CMD="ping -c 1 -w 300"
   else
-    # Fallback: just use basic ping with 1 packet
-    PING_CMD="ping -c 1 8.8.8.8"
+    # Fallback: basic ping with default timeout
+    PING_CMD="ping -c 1"
+  fi
+
+  # Prefer IPv4 to avoid IPv6/AAAA lookup delays
+  if ping -c 1 -4 127.0.0.1 >/dev/null 2>&1; then
+    PING_CMD="ping -4 ${PING_CMD#ping }"
   fi
   
-  # Cache the detected ping command
+  # Cache the detected command for future runs
   mkdir -p "$(dirname "${PING_CACHE_FILE}")"
   echo "${PING_CMD}" > "${PING_CACHE_FILE}"
 fi
 
-if $PING_CMD >/dev/null 2>&1; then
+# Fast online check using multiple anycast DNS servers
+# Tries Cloudflare, Google, and Quad9 in order (optimized for EU)
+fast_online_check() {
+  local cmd="$PING_CMD"
+  for host in 1.1.1.1 8.8.8.8 9.9.9.9; do
+    if $cmd "$host" >/dev/null 2>&1; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Check connectivity and set manifest update flag
+if fast_online_check; then
   echo "Network detected, will try to update manifest..." >&2
   MANIFEST_UPDATE_FLAG="--try-manifest-update"
 else
@@ -349,11 +420,10 @@ else
   MANIFEST_UPDATE_FLAG="--no-manifest-update"
 fi
 
-
-
 # ============================================================================
-# Helper function to trigger Syncthing rescan
+# HELPER FUNCTION: TRIGGER SYNCTHING RESCAN
 # ============================================================================
+
 trigger_syncthing_rescan() {
   if [[ -n "${STC_CMD}" ]]; then
     echo "Triggering Syncthing rescan for ludusavi_server folder..." >&2
@@ -367,47 +437,63 @@ trigger_syncthing_rescan() {
   fi
 }
 
+# ============================================================================
+# MAIN EXECUTION LOGIC
+# ============================================================================
+
 if [[ "$MODE" == "pre" ]]; then
+  # PRE-LAUNCH MODE: Restore saves only
   if [[ -z "${GAME_NAME}" ]]; then
-    echo "Error: GAME_NAME is empty. Set --game-name= or ensure LUTRIS_GAME_NAME is set." >&2
+    echo "Error: GAME_NAME is empty. Set --game-name= or ensure launcher environment variables are set." >&2
     exit 3
   fi
+  
   echo "Running in PRE-LAUNCH mode: restoring saves only..." >&2
   eval "${LUDUSAVI}" ${MANIFEST_UPDATE_FLAG} restore --force --gui --name "${GAME_NAME}"
   exit_code=$?
+  
   if [[ -z "${exit_code:-}" ]]; then exit_code=0; fi
   echo "========================================"
   echo "Ludusavi restore completed with code: ${exit_code}"
   echo "========================================"
+  
   trigger_syncthing_rescan
   exit ${exit_code}
+
 elif [[ "$MODE" == "post" ]]; then
+  # POST-LAUNCH MODE: Backup saves only
   if [[ -z "${GAME_NAME}" ]]; then
-    echo "Error: GAME_NAME is empty. Set --game-name= or ensure LUTRIS_GAME_NAME is set." >&2
+    echo "Error: GAME_NAME is empty. Set --game-name= or ensure launcher environment variables are set." >&2
     exit 3
   fi
+  
   echo "Running in POST-LAUNCH mode: backing up saves only..." >&2
   eval "${LUDUSAVI}" ${MANIFEST_UPDATE_FLAG} backup --force --gui --name "${GAME_NAME}"
   exit_code=$?
+  
   if [[ -z "${exit_code:-}" ]]; then exit_code=0; fi
   echo "========================================"
   echo "Ludusavi backup completed with code: ${exit_code}"
   echo "========================================"
+  
   trigger_syncthing_rescan
   exit ${exit_code}
+
 else
-  # Wrapper mode: restore, run game, backup
+  # WRAPPER MODE: Restore, run game, backup
   eval "${LUDUSAVI}" ${MANIFEST_UPDATE_FLAG} wrap \
     --name "${GAME_NAME}" \
     --force \
     --gui \
     -- "$@"
   exit_code=$?
+  
   echo ""
   echo "========================================"
   echo "Game exited with code: ${exit_code}"
   echo "Backup completed!"
   echo "========================================"
+  
   trigger_syncthing_rescan
   exit ${exit_code}
 fi
