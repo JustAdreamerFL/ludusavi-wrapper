@@ -227,6 +227,92 @@ fi
 echo "========================================"
 echo ""
 
+# ============================================================================
+# Find stc (Syncthing CLI) executable
+# ============================================================================
+STC_CMD=""
+if command -v stc >/dev/null 2>&1; then
+  STC_CMD="stc"
+else
+  # Try common locations where stc might be installed
+  STC_CANDIDATES=(
+    "$HOME/go/bin/stc"
+    "$HOME/.local/bin/stc"
+    "/usr/local/bin/stc"
+    "/opt/homebrew/bin/stc"
+    "/usr/bin/stc"
+  )
+  
+  for candidate in "${STC_CANDIDATES[@]}"; do
+    if [[ -x "${candidate}" ]]; then
+      STC_CMD="${candidate}"
+      break
+    fi
+  done
+fi
+
+# ============================================================================
+# Check Syncthing sync status
+# ============================================================================
+echo "Checking Syncthing sync status for ludusavi_server folder..." >&2
+
+SYNC_CHECK_COMPLETE=false
+SYNC_PERCENTAGE=0
+
+# Try to get sync status using stc json_dump
+if [[ -n "${STC_CMD}" ]]; then
+  if stc_output=$("${STC_CMD}" json_dump 2>/dev/null); then
+    # Parse JSON for ludusavi_server folder sync percentage
+    SYNC_PERCENTAGE=$(echo "${stc_output}" | grep -o '"folderName":"ludusavi_server"[^}]*' | grep -o '"syncPercentDone":[0-9]*' | grep -o '[0-9]*' || echo "0")
+    if [[ -n "${SYNC_PERCENTAGE}" ]]; then
+      SYNC_CHECK_COMPLETE=true
+      echo "Syncthing sync status: ${SYNC_PERCENTAGE}%" >&2
+    fi
+  fi
+  
+  # Fallback to stc status if json_dump didn't work
+  if [[ "${SYNC_CHECK_COMPLETE}" == "false" ]]; then
+    if stc_output=$("${STC_CMD}" status ludusavi_server 2>/dev/null); then
+      # Parse text output for sync percentage
+      SYNC_PERCENTAGE=$(echo "${stc_output}" | grep "ludusavi_server" | awk '{print $3}' | sed 's/%//' || echo "0")
+      if [[ -n "${SYNC_PERCENTAGE}" && "${SYNC_PERCENTAGE}" != "0" ]]; then
+        SYNC_CHECK_COMPLETE=true
+        echo "Syncthing sync status: ${SYNC_PERCENTAGE}%" >&2
+      fi
+    fi
+  fi
+  
+  # If sync is not 100%, show GUI warning
+  if [[ "${SYNC_CHECK_COMPLETE}" == "true" && "${SYNC_PERCENTAGE}" != "100" ]]; then
+    WARNING_MSG="WARNING: Syncthing folder is not fully synced!\n\nCurrent sync: ${SYNC_PERCENTAGE}%\nGame: ${GAME_NAME}\n\nThe game will run, but your saves may not be up to date.\n\nWait for sync to complete before continuing?"
+    echo "WARNING: Syncthing folder is not fully synced (${SYNC_PERCENTAGE}%)!" >&2
+    echo "Game will run anyway, but saves may not be up to date." >&2
+    
+    # Try to show GUI notification - macOS (osascript)
+    if command -v osascript >/dev/null 2>&1; then
+      # Use osascript to show a dialog with timeout and non-blocking behavior
+      # This will show for 10 seconds or until user clicks OK
+      osascript -e "display dialog \"${WARNING_MSG}\" buttons {\"Continue Anyway\"} default button 1 with icon caution with title \"Ludusavi Sync Warning\" giving up after 10" >/dev/null 2>&1 &
+    # Try notify-send for Linux
+    elif command -v notify-send >/dev/null 2>&1; then
+      notify-send -u critical -t 10000 "Ludusavi Sync Warning" "Syncthing not synced (${SYNC_PERCENTAGE}%)!\nGame: ${GAME_NAME}\n\nSaves may not be up to date." >/dev/null 2>&1 &
+    # Try zenity for Linux
+    elif command -v zenity >/dev/null 2>&1; then
+      (zenity --warning --text="${WARNING_MSG}" --title="Ludusavi Sync Warning" --timeout=10 >/dev/null 2>&1) &
+    # Try kdialog for KDE
+    elif command -v kdialog >/dev/null 2>&1; then
+      (kdialog --sorry "${WARNING_MSG}" --title "Ludusavi Sync Warning" >/dev/null 2>&1) &
+    fi
+    
+    # Wait a brief moment to ensure the GUI dialog appears before continuing
+    sleep 1
+  fi
+else
+  echo "Note: stc (Syncthing CLI) not found. Skipping sync status check." >&2
+fi
+
+echo ""
+
 # Quick network check (0.5 second timeout)
 # If we can reach a DNS server, we probably have internet
 MANIFEST_UPDATE_FLAG=""
@@ -265,18 +351,35 @@ fi
 
 
 
+# ============================================================================
+# Helper function to trigger Syncthing rescan
+# ============================================================================
+trigger_syncthing_rescan() {
+  if [[ -n "${STC_CMD}" ]]; then
+    echo "Triggering Syncthing rescan for ludusavi_server folder..." >&2
+    if "${STC_CMD}" rescan ludusavi_server 2>/dev/null; then
+      echo "Syncthing rescan triggered successfully." >&2
+    else
+      echo "Warning: Failed to trigger Syncthing rescan." >&2
+    fi
+  else
+    echo "Note: stc (Syncthing CLI) not found. Skipping Syncthing rescan." >&2
+  fi
+}
+
 if [[ "$MODE" == "pre" ]]; then
   if [[ -z "${GAME_NAME}" ]]; then
     echo "Error: GAME_NAME is empty. Set --game-name= or ensure LUTRIS_GAME_NAME is set." >&2
     exit 3
   fi
   echo "Running in PRE-LAUNCH mode: restoring saves only..." >&2
-  eval "${LUDUSAVI}" ${MANIFEST_UPDATE_FLAG} restore --force --gui "${GAME_NAME}"
+  eval "${LUDUSAVI}" ${MANIFEST_UPDATE_FLAG} restore --force --gui --name "${GAME_NAME}"
   exit_code=$?
   if [[ -z "${exit_code:-}" ]]; then exit_code=0; fi
   echo "========================================"
   echo "Ludusavi restore completed with code: ${exit_code}"
   echo "========================================"
+  trigger_syncthing_rescan
   exit ${exit_code}
 elif [[ "$MODE" == "post" ]]; then
   if [[ -z "${GAME_NAME}" ]]; then
@@ -284,19 +387,20 @@ elif [[ "$MODE" == "post" ]]; then
     exit 3
   fi
   echo "Running in POST-LAUNCH mode: backing up saves only..." >&2
-  eval "${LUDUSAVI}" ${MANIFEST_UPDATE_FLAG} backup --force --gui "${GAME_NAME}"
+  eval "${LUDUSAVI}" ${MANIFEST_UPDATE_FLAG} backup --force --gui --name "${GAME_NAME}"
   exit_code=$?
   if [[ -z "${exit_code:-}" ]]; then exit_code=0; fi
   echo "========================================"
   echo "Ludusavi backup completed with code: ${exit_code}"
   echo "========================================"
+  trigger_syncthing_rescan
   exit ${exit_code}
 else
   # Wrapper mode: restore, run game, backup
   eval "${LUDUSAVI}" ${MANIFEST_UPDATE_FLAG} wrap \
+    --name "${GAME_NAME}" \
     --force \
     --gui \
-    "${GAME_NAME}" \
     -- "$@"
   exit_code=$?
   echo ""
@@ -304,5 +408,6 @@ else
   echo "Game exited with code: ${exit_code}"
   echo "Backup completed!"
   echo "========================================"
+  trigger_syncthing_rescan
   exit ${exit_code}
 fi
