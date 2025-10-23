@@ -23,6 +23,122 @@ env >> /tmp/ludusavi_wrapper_debug.log
 set -euo pipefail
 
 # ============================================================================
+# QUICK HELP CHECK (before anything else)
+# ============================================================================
+
+# Check for help flag immediately to avoid unnecessary processing
+for arg in "$@"; do
+  if [[ "$arg" == "--help" || "$arg" == "-h" ]]; then
+    cat << 'EOF'
+Ludusavi Universal Wrapper
+==========================
+Automatically backup and restore game saves using ludusavi.
+
+USAGE:
+    ludusavi-wrapper [OPTIONS] <game_executable> [game_args...]
+    ludusavi-wrapper [OPTIONS] --mode=pre|post [--game-name="Game Name"]
+
+OPTIONS:
+    --cache              Enable caching of tool paths for faster startup
+    --mode=MODE          Execution mode (default: wrapper)
+                         wrapper = restore, run game, backup
+                         pre     = restore saves only
+                         post    = backup saves only
+    --game-name=NAME     Override game name (auto-detected if not set)
+    -h, --help           Show this help message
+
+EXAMPLES:
+    # Run game with automatic save backup/restore
+    ludusavi-wrapper /path/to/game
+
+    # With caching enabled (faster subsequent runs)
+    ludusavi-wrapper --cache /path/to/game
+
+    # Force specific game name
+    ludusavi-wrapper --game-name="My Game" /path/to/game
+
+    # Just restore saves (auto-detects game from launcher or directory)
+    ludusavi-wrapper --mode=pre
+
+    # Restore saves with explicit game name
+    ludusavi-wrapper --mode=pre --game-name="My Game"
+
+    # Just backup saves (auto-detects game name)
+    ludusavi-wrapper --mode=post
+
+NOTES:
+    - Game name auto-detected from: launcher env vars → .app bundle → 
+      executable name → current directory name
+    - For pre/post modes without --game-name, run from game directory or 
+      ensure launcher sets environment variables
+    - Caching validates paths automatically and re-detects if stale
+    - Use in Heroic/Lutris wrapper field: /path/to/ludusavi-wrapper --cache
+
+EOF
+    exit 0
+  fi
+done
+
+# ============================================================================
+# COMMAND-LINE ARGUMENT PARSING (must happen before tool detection)
+# ============================================================================
+
+# Mode selection: wrapper (default), pre, post
+MODE="wrapper"
+GAME_NAME_ARG=""
+USE_CACHE=false
+
+# Parse arguments first to determine if caching should be used
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --help|-h)
+      # Already handled above, but keep for completeness
+      exit 0
+      ;;
+    --mode=*)
+      MODE="${1#--mode=}"
+      shift
+      ;;
+    --game-name=*)
+      GAME_NAME_ARG="${1#--game-name=}"
+      shift
+      ;;
+    --cache)
+      USE_CACHE=true
+      shift
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+# ============================================================================
+# EARLY ARGUMENT VALIDATION (before tool detection for faster feedback)
+# ============================================================================
+
+# Validate that wrapper mode has a game executable
+if [[ "$MODE" == "wrapper" && $# -eq 0 ]]; then
+  echo "" >&2
+  echo "Error: No game executable specified" >&2
+  echo "" >&2
+  echo "USAGE:" >&2
+  echo "  $0 [--cache] [--game-name=NAME] <game_executable> [args...]" >&2
+  echo "" >&2
+  echo "EXAMPLES:" >&2
+  echo "  $0 /path/to/game                              # Basic usage" >&2
+  echo "  $0 --cache /path/to/game                      # With caching" >&2
+  echo "  $0 --cache --game-name=\"My Game\" /path/to/game  # With custom name" >&2
+  echo "" >&2
+  echo "For full help, run: $0 --help" >&2
+  echo "" >&2
+  exit 2
+fi
+
+# Note: pre/post modes don't require --game-name if launcher env vars are set
+# Validation happens later after game name detection
+
+# ============================================================================
 # CONFIGURATION
 # ============================================================================
 
@@ -55,17 +171,33 @@ PING_CACHE_FILE="${CACHE_DIR}/ludusavi_wrapper_ping_cmd"
 # ============================================================================
 # LUDUSAVI AUTO-DETECTION
 # ============================================================================
+# Note: Cache validation ensures stale/invalid paths are automatically re-detected
+# Handles cases like: executable moved, uninstalled, or switched between native/Flatpak
 
 if [[ -z "${LUDUSAVI}" ]] || [[ ! -x "${LUDUSAVI}" ]]; then
-  # Try to load from cache first
-  if [[ -f "${CACHE_FILE}" ]]; then
+  # Try to load from cache first (if caching is enabled)
+  if [[ "${USE_CACHE}" == "true" && -f "${CACHE_FILE}" ]]; then
     CACHED_PATH=$(cat "${CACHE_FILE}" 2>/dev/null)
-    if [[ -n "${CACHED_PATH}" ]] && [[ -x "${CACHED_PATH}" ]]; then
-      LUDUSAVI="${CACHED_PATH}"
+    
+    # Validate cached path: check if it's executable or a valid Flatpak command
+    if [[ -n "${CACHED_PATH}" ]]; then
+      if [[ -x "${CACHED_PATH}" ]]; then
+        # Regular executable file
+        LUDUSAVI="${CACHED_PATH}"
+        echo "Loaded ludusavi path from cache: ${LUDUSAVI}" >&2
+      elif [[ "${CACHED_PATH}" == "flatpak run "* ]]; then
+        # Flatpak command - verify flatpak is available
+        if command -v flatpak >/dev/null 2>&1; then
+          LUDUSAVI="${CACHED_PATH}"
+          echo "Loaded ludusavi path from cache: ${LUDUSAVI}" >&2
+        else
+          echo "Cached Flatpak command invalid (flatpak not found), re-detecting..." >&2
+        fi
+      fi
     fi
   fi
   
-  # If cache didn't work, search for ludusavi
+  # If cache didn't work or caching disabled, search for ludusavi
   if [[ -z "${LUDUSAVI}" ]] || [[ ! -x "${LUDUSAVI}" ]]; then
     echo "Auto-detecting ludusavi location..." >&2
     
@@ -85,10 +217,12 @@ if [[ -z "${LUDUSAVI}" ]] || [[ ! -x "${LUDUSAVI}" ]]; then
         LUDUSAVI="${candidate}"
         echo "Found ludusavi at: ${LUDUSAVI}" >&2
         
-        # Cache the found path for future runs
-        mkdir -p "$(dirname "${CACHE_FILE}")"
-        echo "${LUDUSAVI}" > "${CACHE_FILE}"
-        echo "Cached path for future use" >&2
+        # Cache the found path for future runs (if caching is enabled)
+        if [[ "${USE_CACHE}" == "true" ]]; then
+          mkdir -p "$(dirname "${CACHE_FILE}")"
+          echo "${LUDUSAVI}" > "${CACHE_FILE}"
+          echo "Cached path for future use" >&2
+        fi
         break
       fi
     done
@@ -99,10 +233,12 @@ if [[ -z "${LUDUSAVI}" ]] || [[ ! -x "${LUDUSAVI}" ]]; then
         LUDUSAVI="flatpak run com.github.mtkennerly.ludusavi"
         echo "Found ludusavi as Flatpak" >&2
         
-        # Cache the flatpak command
-        mkdir -p "$(dirname "${CACHE_FILE}")"
-        echo "${LUDUSAVI}" > "${CACHE_FILE}"
-        echo "Cached flatpak command for future use" >&2
+        # Cache the flatpak command (if caching is enabled)
+        if [[ "${USE_CACHE}" == "true" ]]; then
+          mkdir -p "$(dirname "${CACHE_FILE}")"
+          echo "${LUDUSAVI}" > "${CACHE_FILE}"
+          echo "Cached flatpak command for future use" >&2
+        fi
       fi
     fi
     
@@ -115,37 +251,6 @@ if [[ -z "${LUDUSAVI}" ]] || [[ ! -x "${LUDUSAVI}" ]]; then
       exit 1
     fi
   fi
-fi
-
-# ============================================================================
-# COMMAND-LINE ARGUMENT PARSING
-# ============================================================================
-
-# Mode selection: wrapper (default), pre, post
-MODE="wrapper"
-GAME_NAME_ARG=""
-
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --mode=*)
-      MODE="${1#--mode=}"
-      shift
-      ;;
-    --game-name=*)
-      GAME_NAME_ARG="${1#--game-name=}"
-      shift
-      ;;
-    *)
-      break
-      ;;
-  esac
-done
-
-# Validate that wrapper mode has a game executable
-if [[ "$MODE" == "wrapper" && $# -eq 0 ]]; then
-  echo "Error: No game executable specified" >&2
-  echo "Usage: $0 [--mode=wrapper|pre|post] [--game-name=NAME] <game_executable> [args...]" >&2
-  exit 2
 fi
 
 # ============================================================================
@@ -232,6 +337,31 @@ if [[ -z "${GAME_NAME}" ]]; then
     
     echo "Detected game name from working directory: ${GAME_NAME}" >&2
   fi
+fi
+
+# ============================================================================
+# VALIDATE GAME NAME (after detection)
+# ============================================================================
+
+# For pre/post modes, ensure we have a game name
+if [[ ("$MODE" == "pre" || "$MODE" == "post") && -z "${GAME_NAME}" ]]; then
+  echo "" >&2
+  echo "Error: Could not detect game name for --mode=$MODE" >&2
+  echo "" >&2
+  echo "Game name detection failed. This can happen when:" >&2
+  echo "  - Running outside a launcher (no env vars set)" >&2
+  echo "  - Running from a directory that doesn't contain the game name" >&2
+  echo "" >&2
+  echo "SOLUTIONS:" >&2
+  echo "  1. Specify game name explicitly:" >&2
+  echo "     $0 --mode=$MODE --game-name=\"Game Name\"" >&2
+  echo "" >&2
+  echo "  2. Run from the game's directory:" >&2
+  echo "     cd /path/to/Game && $0 --mode=$MODE" >&2
+  echo "" >&2
+  echo "  3. Use from within a launcher (Lutris/Heroic) that sets env vars" >&2
+  echo "" >&2
+  exit 3
 fi
 
 # ============================================================================
@@ -364,9 +494,12 @@ echo ""
 MANIFEST_UPDATE_FLAG=""
 PING_CMD=""
 
-# Load cached ping command if available
-if [[ -f "${PING_CACHE_FILE}" ]]; then
+# Load cached ping command if available (if caching is enabled)
+if [[ "${USE_CACHE}" == "true" && -f "${PING_CACHE_FILE}" ]]; then
   PING_CMD=$(cat "${PING_CACHE_FILE}" 2>/dev/null)
+  if [[ -n "${PING_CMD}" ]]; then
+    echo "Loaded ping command from cache: ${PING_CMD}" >&2
+  fi
 fi
 
 # Detect appropriate ping timeout flag for cross-platform compatibility
@@ -394,9 +527,12 @@ if [[ -z "${PING_CMD}" ]]; then
     PING_CMD="ping -4 ${PING_CMD#ping }"
   fi
   
-  # Cache the detected command for future runs
-  mkdir -p "$(dirname "${PING_CACHE_FILE}")"
-  echo "${PING_CMD}" > "${PING_CACHE_FILE}"
+  # Cache the detected command for future runs (if caching is enabled)
+  if [[ "${USE_CACHE}" == "true" ]]; then
+    mkdir -p "$(dirname "${PING_CACHE_FILE}")"
+    echo "${PING_CMD}" > "${PING_CACHE_FILE}"
+    echo "Cached ping command for future use" >&2
+  fi
 fi
 
 # Fast online check using multiple anycast DNS servers

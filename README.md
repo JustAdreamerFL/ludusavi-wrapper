@@ -2,38 +2,34 @@
 
 A wrapper script for automatic game save backup and restore using [Ludusavi](https://github.com/mtkennerly/ludusavi).
 
-Basically, if you use this with Syncthing, you get your own Steam Cloud Saves that works with any game. Pretty neat.
+Basically, if you use this with Syncthing, you get your own Steam Cloud Saves that works with any game.
 
-**Tested on:** Linux and macOS (should work on both, but your mileage may vary)
+**I tested it on:** Linux and macOS
 
-## What it does
+## How does it worke
 
 - Works with Lutris, Heroic Launcher, and probably other launchers too
 - Automatically finds ludusavi wherever you installed it (Homebrew, Flatpak, Cargo, etc.)
-- If you have Syncthing set up, it'll check if your saves are synced before launching
-- Shows a GUI warning if Syncthing isn't done syncing yet
+- If you have Syncthing set up, it'll check if your saves are synced before launching (this only works if you have [stc](https://github.com/tenox7/stc) installed)
+- Shows a GUI warning if Syncthing isn't done syncing yet when launching a game
 - Three modes:
   - `wrapper` (default): Restores saves → Runs game → Backs up saves
   - `pre`: Just restore saves
   - `post`: Just backup saves
 - Tries to figure out the game name automatically from your launcher
-- Caches stuff so it starts up fast
+- Caches stuff so it starts up fast (like what is the best ping commmand for your OS. idk if this is a good feature. i have made it optional by the --cache flag)
 - Checks if you're online and updates the ludusavi manifest if you are
 
 ## What you need
 
-### The essentials
+- **Bash**
+- **[Ludusavi](https://github.com/mtkennerly/ludusavi)**
+- A **game launcher** that lets you wrap executables (Lutris, Heroic, etc.)
 
-- **Bash** (you already have this)
-- **[Ludusavi](https://github.com/mtkennerly/ludusavi)** - The actual backup tool
-  - Get it from: Homebrew, Flatpak, Cargo, or whatever
-- A game launcher that lets you wrap executables (Lutris, Heroic, etc.)
+## Optional stuff (for syncing saves between computers)
 
-### Optional stuff (for syncing saves between computers)
-
-- **[Syncthing](https://syncthing.net/)** - Syncs your saves across devices
-- **[stc](https://github.com/tenox7/stc)** - CLI tool for Syncthing (so the script can check sync status)
-  - Install with: `go install github.com/tenox7/stc@latest`
+- **[Syncthing](https://syncthing.net/downloads/#:~:text=syncthing.net.-,Base%20Syncthing,-This%20is%20the)**
+- **[stc](https://github.com/tenox7/stc)**
 
 ## Setting it up
 
@@ -41,19 +37,29 @@ Basically, if you use this with Syncthing, you get your own Steam Cloud Saves th
 
 Pick whichever method works for you:
 
-**macOS (Homebrew):**
+### macOS
+
+**(Homebrew):**
 
 ```bash
 brew install ludusavi
 ```
 
-**Linux (Flatpak):**
+### Linux
+
+**(Flatpak):**
 
 ```bash
 flatpak install com.github.mtkennerly.ludusavi
 ```
 
-**Linux/macOS (Cargo):**
+**(Arch):**
+
+```bash
+pacman -S ludusavi
+```
+
+### Linux/macOS (Cargo - long compile time bruh):
 
 ```bash
 cargo install ludusavi
@@ -75,12 +81,12 @@ mv ludusavi_universal_wrapper.sh ~/.local/bin/ludusavi-wrapper
 
 ### 3. (Optional) Set up Syncthing for multi-device sync
 
-Only do this if you want to sync saves between computers:
+if you fancy
 
 **Get Syncthing:**
 
 - macOS: `brew install syncthing`
-- Linux: Check [their website](https://syncthing.net/downloads/)
+- Linux: Check [their website](https://syncthing.net/downloads/#:~:text=syncthing.net.-,Base%20Syncthing,-This%20is%20the)
 
 **Get stc (Syncthing CLI):**
 
@@ -90,7 +96,7 @@ go install github.com/tenox7/stc@latest
 
 **Set up the folder:**
 
-1. Start Syncthing and open the web UI (usually http://localhost:8384)
+1. Start Syncthing and open the web UI (default is http://localhost:8384)
 2. Make a folder called `ludusavi_server`
 3. Point it to wherever ludusavi saves your backups
 4. Share it with your other computers
@@ -98,7 +104,7 @@ go install github.com/tenox7/stc@latest
 
 ## Configure ludusavi
 
-Just make sure ludusavi knows where to save backups (preferably somewhere Syncthing can sync):
+Just make sure ludusavi knows where to save backups:
 
 ```bash
 # Run it once to set things up
@@ -154,6 +160,12 @@ Should show ludusavi getting detected automatically.
 ludusavi-wrapper /path/to/game/executable [game args]
 ```
 
+**With caching enabled (faster on repeated runs):**
+
+```bash
+ludusavi-wrapper --cache /path/to/game/executable [game args]
+```
+
 **Just restore saves:**
 
 ```bash
@@ -175,6 +187,12 @@ ludusavi-wrapper --game-name="Actual Game Name" /path/to/game
 ```
 
 ## Configuration stuff
+
+### Command-line options
+
+- `--mode=wrapper|pre|post` - What the script does (default: wrapper)
+- `--game-name="Name"` - Force a specific game name
+- `--cache` - Enable caching (remembers where tools are for faster startup)
 
 ### Environment variables you can set
 
@@ -198,19 +216,57 @@ export LUDUSAVI_PATH="flatpak run com.github.mtkennerly.ludusavi"
 export LAUNCHER_TYPE="heroic"  # or "lutris" or "auto"
 ```
 
-### Where stuff gets cached
+### How caching works
 
-The script remembers where it found tools so it starts faster next time:
+By default, the script searches for tools every time it runs. If you want it to remember where things are (for faster startup), use the `--cache` flag.
+
+**Enable caching:**
+
+```bash
+ludusavi-wrapper --cache /path/to/game
+```
+
+**What gets cached:**
+
+- Ludusavi executable path
+- Ping command for your system
+
+**Cache locations:**
 
 - **Linux**: `~/.cache/ludusavi_wrapper_path` and `ludusavi_wrapper_ping_cmd`
 - **macOS**: `~/Library/Caches/ludusavi-wrapper/`
 
-If you move/reinstall stuff, clear the cache:
+**Clear cache if you move/reinstall stuff:**
 
 ```bash
 rm -rf ~/.cache/ludusavi_wrapper_*
 # or on macOS:
 rm -rf ~/Library/Caches/ludusavi-wrapper/
+```
+
+**Cache is automatically validated:**
+
+The script checks if cached paths are still valid before using them. If you:
+
+- Move ludusavi to a different location
+- Switch between Flatpak and native packages
+- Uninstall and reinstall in a different way
+
+The script will detect the cached path is invalid and automatically re-detect the correct location. You don't need to manually clear the cache unless you want to force re-detection.
+
+**Performance difference:**
+
+- Without `--cache`: Searches for tools every time (~0.5-1s on first section)
+- With `--cache`: Loads from cache after first run (~0.1s)
+  - If cache is stale: Re-detects automatically (~0.5-1s, then cached for next time)
+
+### Using caching in launchers
+
+If you want caching with Heroic/Lutris, just add `--cache` to the wrapper command:
+
+```bash
+# Heroic/Lutris wrapper field:
+~/.local/bin/ludusavi-wrapper --cache
 ```
 
 ## How it works (if you're curious)
@@ -219,9 +275,10 @@ rm -rf ~/Library/Caches/ludusavi-wrapper/
 
 1. **Finding tools**
 
-   - Looks for ludusavi in common spots (Homebrew, Flatpak, Cargo, etc.)
+   - If `--cache` is enabled and cache exists: loads paths from cache instantly
+   - Otherwise: searches for ludusavi in common spots (Homebrew, Flatpak, Cargo, etc.)
    - Same for stc if you have Syncthing set up
-   - Uses cached paths if it found them before
+   - Saves paths to cache if `--cache` flag was used
 
 2. **Figuring out the game name**
 
@@ -447,8 +504,12 @@ ludusavi-wrapper /tmp/test_game.sh
 
 ### Making it faster
 
-**The script already caches stuff:**
-First run is slower while it figures out where everything is. After that it's faster.
+**Use caching:**
+Add `--cache` flag to remember where tools are. First run searches for everything, then it's instant.
+
+```bash
+ludusavi-wrapper --cache /path/to/game
+```
 
 **Skip network checks:**
 If you don't want manifest updates, edit the script:
