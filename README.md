@@ -1,15 +1,13 @@
 # Ludusavi Universal Wrapper (for mac/Linux)
 - windows version is seperate, and i didnt make it as of now
 
-> **Just want to get started?** See the [Quick Start Guide](QUICKSTART.md) 📖
-
 ## What is its function?
 
-- ✅ **Automatic backups** - Your saves are backed up every time you quit a game
-- ✅ **Auto-restore** - Latest saves restored when you launch a game
-- ✅ **Cross-device sync** - Play on your laptop, continue on your desktop (with Syncthing)
-- ✅ **Works everywhere** - Compatible with Heroic, Lutris, and any launcher that supports wrappers, or at least lets you run a command before/after launching a game
-- ✅ **Zero maintenance** - Set it up once, forget about it, i hope 😇
+- **Automatic backups** - Your saves are backed up every time you quit a game
+- **Auto-restore** - Latest saves restored when you launch a game
+- **Cross-device sync** - Play on your laptop, continue on your desktop (with Syncthing)
+- **Works everywhere** - Compatible with Heroic, Lutris, and any launcher that supports wrappers, or at least lets you run a command before/after launching a game
+- **Zero maintenance** - Set it up once, forget about it, i hope 😇 (this emoji i did add, not the clanker)
 
 ## Quick Start
 
