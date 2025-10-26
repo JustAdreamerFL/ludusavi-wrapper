@@ -1,7 +1,7 @@
 # Ludusavi Universal Wrapper (for mac/Linux)
 - windows version is seperate, and i didnt make it as of now
 
-## What is its function?
+## What does it do
 
 - **Automatic backups** - Your saves are backed up every time you quit a game
 - **Auto-restore** - Latest saves restored when you launch a game
