@@ -66,6 +66,41 @@ Every time you launch a game:
 2. **Runs** your game normally
 3. **Backs up** your saves when you quit
 
+## Sync Across Multiple Computers (Optional)
+
+Want to play on different devices? Add Syncthing for automatic save synchronization.
+
+### What You'll Need
+
+- [Syncthing](https://syncthing.net/downloads/) - Free, open-source file sync
+- [stc](https://github.com/tenox7/stc) - Syncthing CLI tool (optional, if you want to verify sync status before restoring saves)
+
+### Setup Steps
+
+1. **Install Syncthing:**
+   - macOS: `brew install syncthing`
+   - Linux: Follow the [official guide](https://syncthing.net/downloads/#:~:text=syncthing.net.-,Base%20Syncthing,-This%20is%20the)
+
+2. **Configure Syncthing:**
+   - Start Syncthing and open http://localhost:8384
+   - Create a new folder called `ludusavi_server`
+   - Point it to ludusavi's backup directory
+   - *Share this folder* with your other devices
+
+3. **Install stc (optional, if you want to verify sync status before restoring saves):**
+   ```bash
+   go install github.com/tenox7/stc@latest
+   ```
+ **Configure the stc:**
+
+   Create `~/.config/ludusavi-wrapper/config` with:
+   ```
+   syncthing_url http://localhost:8384
+   api_key YOUR-SYNCTHING-API-KEY
+   ```
+
+- Now your saves sync automatically between all your computers
+
 ## Usage Examples
 
 ### Wrapper Mode
@@ -117,7 +152,9 @@ syncthing_url http://localhost:8384
 api_key YOUR-API-KEY-HERE
 
 # Customize behavior
-# (No additional options yet)
+enable_notifications true          # Show desktop notifications
+check_network true                 # Update manifest when online
+max_sync_wait 30                   # Max seconds to wait for sync
 ```
 
 ### Command Line Options
@@ -128,41 +165,6 @@ api_key YOUR-API-KEY-HERE
 --game-name=NAME     Override automatic game name detection
 -h, --help           Show help message
 ```
-
-## Sync Across Multiple Computers (Optional)
-
-Want to play on different devices? Add Syncthing for automatic save synchronization.
-
-### What You'll Need
-
-- [Syncthing](https://syncthing.net/downloads/) - Free, open-source file sync
-- [stc](https://github.com/tenox7/stc) - Syncthing CLI tool (optional, if you want to verify sync status before restoring saves)
-
-### Setup Steps
-
-1. **Install Syncthing:**
-   - macOS: `brew install syncthing`
-   - Linux: Follow the [official guide](https://syncthing.net/downloads/#:~:text=syncthing.net.-,Base%20Syncthing,-This%20is%20the)
-
-2. **Configure Syncthing:**
-   - Start Syncthing and open http://localhost:8384
-   - Create a new folder called `ludusavi_server`
-   - Point it to ludusavi's backup directory
-   - *Share this folder* with your other devices
-
-3. **Install stc (optional, if you want to verify sync status before restoring saves):**
-   ```bash
-   go install github.com/tenox7/stc@latest
-   ```
- **Configure the stc:**
-
-   Create `~/.config/ludusavi-wrapper/config` with:
-   ```
-   syncthing_url http://localhost:8384
-   api_key YOUR-SYNCTHING-API-KEY
-   ```
-
-- Now your saves sync automatically between all your computers
 
 ## Troubleshooting
 
@@ -185,11 +187,10 @@ Check that:
 3. The `ludusavi_server` folder is properly synced
 
 ### Notifications not showing
-The sync warning uses the same title/body across all tools, but the UI depends on what is installed. Ensure you have one of:
-- `osascript` (macOS dialog)
-- `notify-send` (Linux notification)
-- `zenity` (Linux dialog)
-- `kdialog` (KDE dialog)
+The script tries multiple notification methods. Ensure you have one of:
+- `osascript` (macOS)
+- `notify-send` (Linux)
+- `zenity` (Linux fallback)
 
 ### Caching Issues
 Delete the cache to force re-detection:
