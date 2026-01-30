@@ -16,7 +16,7 @@
 # ============================================================================
 
 # Debug logging
-echo "[$(date)] Running $0 as $USER in $PWD with args: $@" >> /tmp/ludusavi_wrapper_debug.log
+echo "[$(date)] Running $0 as $USER in $PWD with args: $*" >> /tmp/ludusavi_wrapper_debug.log
 env >> /tmp/ludusavi_wrapper_debug.log
 
 # Exit on error, undefined variables, and pipe failures
@@ -390,7 +390,7 @@ echo "Ludusavi Wrapper for ${GAME_NAME}"
 echo "========================================"
 echo "Launcher: ${LAUNCHER_TYPE}"
 echo "Ludusavi: ${LUDUSAVI}"
-echo "Command: $@"
+echo "Command: $*"
 echo ""
 echo "Environment variables:"
 if [[ "${LAUNCHER_TYPE}" == "lutris" ]]; then
@@ -603,7 +603,12 @@ if [[ "$MODE" == "pre" ]]; then
   fi
 
   echo "Running in PRE-LAUNCH mode: restoring saves only..." >&2
-  eval "${LUDUSAVI}" ${MANIFEST_UPDATE_FLAG} restore --force --gui --name "${GAME_NAME}"
+  # Use array to properly handle multi-word commands like "flatpak run ..."
+  if [[ "${LUDUSAVI}" == *" "* ]]; then
+    eval "${LUDUSAVI}" ${MANIFEST_UPDATE_FLAG} restore --force --gui --name '"${GAME_NAME}"'
+  else
+    "${LUDUSAVI}" ${MANIFEST_UPDATE_FLAG} restore --force --gui --name "${GAME_NAME}"
+  fi
   exit_code=$?
 
   if [[ -z "${exit_code:-}" ]]; then exit_code=0; fi
@@ -622,7 +627,12 @@ elif [[ "$MODE" == "post" ]]; then
   fi
 
   echo "Running in POST-LAUNCH mode: backing up saves only..." >&2
-  eval "${LUDUSAVI}" ${MANIFEST_UPDATE_FLAG} backup --force --gui --name "${GAME_NAME}"
+  # Use array to properly handle multi-word commands like "flatpak run ..."
+  if [[ "${LUDUSAVI}" == *" "* ]]; then
+    eval "${LUDUSAVI}" ${MANIFEST_UPDATE_FLAG} backup --force --gui --name '"${GAME_NAME}"'
+  else
+    "${LUDUSAVI}" ${MANIFEST_UPDATE_FLAG} backup --force --gui --name "${GAME_NAME}"
+  fi
   exit_code=$?
 
   if [[ -z "${exit_code:-}" ]]; then exit_code=0; fi
@@ -635,11 +645,20 @@ elif [[ "$MODE" == "post" ]]; then
 
 else
   # WRAPPER MODE: Restore, run game, backup
-  eval "${LUDUSAVI}" ${MANIFEST_UPDATE_FLAG} wrap \
-    --name "${GAME_NAME}" \
-    --force \
-    --gui \
-    -- "$@"
+  # Use array to properly handle multi-word commands like "flatpak run ..."
+  if [[ "${LUDUSAVI}" == *" "* ]]; then
+    eval "${LUDUSAVI}" ${MANIFEST_UPDATE_FLAG} wrap \
+      --name '"${GAME_NAME}"' \
+      --force \
+      --gui \
+      -- '"$@"'
+  else
+    "${LUDUSAVI}" ${MANIFEST_UPDATE_FLAG} wrap \
+      --name "${GAME_NAME}" \
+      --force \
+      --gui \
+      -- "$@"
+  fi
   exit_code=$?
 
   echo ""
