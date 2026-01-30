@@ -603,11 +603,11 @@ if [[ "$MODE" == "pre" ]]; then
   fi
 
   echo "Running in PRE-LAUNCH mode: restoring saves only..." >&2
-  # Use array to properly handle multi-word commands like "flatpak run ..."
+  # Conditionally use eval for multi-word commands like "flatpak run ..."
   if [[ "${LUDUSAVI}" == *" "* ]]; then
-    eval "${LUDUSAVI}" ${MANIFEST_UPDATE_FLAG} restore --force --gui --name '"${GAME_NAME}"'
+    eval "${LUDUSAVI}" '"${MANIFEST_UPDATE_FLAG}"' restore --force --gui --name '"${GAME_NAME}"'
   else
-    "${LUDUSAVI}" ${MANIFEST_UPDATE_FLAG} restore --force --gui --name "${GAME_NAME}"
+    "${LUDUSAVI}" "${MANIFEST_UPDATE_FLAG}" restore --force --gui --name "${GAME_NAME}"
   fi
   exit_code=$?
 
@@ -627,11 +627,11 @@ elif [[ "$MODE" == "post" ]]; then
   fi
 
   echo "Running in POST-LAUNCH mode: backing up saves only..." >&2
-  # Use array to properly handle multi-word commands like "flatpak run ..."
+  # Conditionally use eval for multi-word commands like "flatpak run ..."
   if [[ "${LUDUSAVI}" == *" "* ]]; then
-    eval "${LUDUSAVI}" ${MANIFEST_UPDATE_FLAG} backup --force --gui --name '"${GAME_NAME}"'
+    eval "${LUDUSAVI}" '"${MANIFEST_UPDATE_FLAG}"' backup --force --gui --name '"${GAME_NAME}"'
   else
-    "${LUDUSAVI}" ${MANIFEST_UPDATE_FLAG} backup --force --gui --name "${GAME_NAME}"
+    "${LUDUSAVI}" "${MANIFEST_UPDATE_FLAG}" backup --force --gui --name "${GAME_NAME}"
   fi
   exit_code=$?
 
@@ -645,15 +645,15 @@ elif [[ "$MODE" == "post" ]]; then
 
 else
   # WRAPPER MODE: Restore, run game, backup
-  # Use array to properly handle multi-word commands like "flatpak run ..."
+  # Conditionally use eval for multi-word commands like "flatpak run ..."
   if [[ "${LUDUSAVI}" == *" "* ]]; then
-    eval "${LUDUSAVI}" ${MANIFEST_UPDATE_FLAG} wrap \
+    eval "${LUDUSAVI}" '"${MANIFEST_UPDATE_FLAG}"' wrap \
       --name '"${GAME_NAME}"' \
       --force \
       --gui \
       -- '"$@"'
   else
-    "${LUDUSAVI}" ${MANIFEST_UPDATE_FLAG} wrap \
+    "${LUDUSAVI}" "${MANIFEST_UPDATE_FLAG}" wrap \
       --name "${GAME_NAME}" \
       --force \
       --gui \
