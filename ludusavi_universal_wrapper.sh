@@ -436,12 +436,12 @@ fi
 # SYNCTHING SYNC STATUS CHECK
 # ============================================================================
 
-echo "Checking Syncthing sync status for ludusavi_server folder..." >&2
-
 SYNC_CHECK_COMPLETE=false
 SYNC_PERCENTAGE=0
 
 if [[ -n "${STC_CMD}" ]]; then
+  echo "Checking Syncthing sync status for ludusavi_server folder..." >&2
+
   # Try JSON API first (more reliable)
   if stc_output=$("${STC_CMD}" json_dump 2>/dev/null); then
     # Parse JSON for ludusavi_server folder sync percentage
@@ -475,24 +475,25 @@ if [[ -n "${STC_CMD}" ]]; then
 
   # Show GUI warning if not fully synced
   if [[ "${SYNC_CHECK_COMPLETE}" == "true" && "${SYNC_PERCENTAGE}" != "100" ]]; then
-    WARNING_MSG="WARNING: Syncthing folder is not fully synced!\n\nCurrent sync: ${SYNC_PERCENTAGE}%\nGame: ${GAME_NAME}\n\nThe game will run, but your saves may not be up to date.\n\nWait for sync to complete before continuing?"
+    WARNING_TITLE="Ludusavi Sync Warning"
+    WARNING_MSG="Syncthing folder is not fully synced.\n\nCurrent sync: ${SYNC_PERCENTAGE}%\nGame: ${GAME_NAME}\n\nThe game will run, but your saves may not be up to date."
 
     echo "WARNING: Syncthing folder is not fully synced (${SYNC_PERCENTAGE}%)!" >&2
     echo "Game will run anyway, but saves may not be up to date." >&2
 
-    # Try to show GUI notification based on available tools
+    # Show a consistent warning message with whatever UI tool is available
     if command -v osascript >/dev/null 2>&1; then
       # macOS: AppleScript dialog (10 second timeout)
-      osascript -e "display dialog \"${WARNING_MSG}\" buttons {\"Continue Anyway\"} default button 1 with icon caution with title \"Ludusavi Sync Warning\" giving up after 10" >/dev/null 2>&1 &
+      osascript -e "display dialog \"${WARNING_MSG}\" buttons {\"Continue Anyway\"} default button 1 with icon caution with title \"${WARNING_TITLE}\" giving up after 10" >/dev/null 2>&1 &
     elif command -v notify-send >/dev/null 2>&1; then
       # Linux: notify-send (desktop notification)
-      notify-send -u critical -t 10000 "Ludusavi Sync Warning" "Syncthing not synced (${SYNC_PERCENTAGE}%)!\nGame: ${GAME_NAME}\n\nSaves may not be up to date." >/dev/null 2>&1 &
+      notify-send -u critical -t 10000 "${WARNING_TITLE}" "${WARNING_MSG}" >/dev/null 2>&1 &
     elif command -v zenity >/dev/null 2>&1; then
       # Linux: Zenity dialog
-      (zenity --warning --text="${WARNING_MSG}" --title="Ludusavi Sync Warning" --timeout=10 >/dev/null 2>&1) &
+      (zenity --warning --text="${WARNING_MSG}" --title="${WARNING_TITLE}" --timeout=10 >/dev/null 2>&1) &
     elif command -v kdialog >/dev/null 2>&1; then
       # Linux KDE: KDialog
-      (kdialog --sorry "${WARNING_MSG}" --title "Ludusavi Sync Warning" >/dev/null 2>&1) &
+      (kdialog --sorry "${WARNING_MSG}" --title "${WARNING_TITLE}" >/dev/null 2>&1) &
     fi
 
     # Wait briefly to ensure dialog appears
