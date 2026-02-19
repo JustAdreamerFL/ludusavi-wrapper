@@ -1,4 +1,3 @@
-# Todo do's
-
-- make a simple 1 line install script
-- make a good UX script for generating ludusavi redirects which maybee could be automated but idk
+# Todo's
+- make it so if ludusavi doesnt find the game ( in the current state of the script, that means, that the env is not defined correctly or it cant be detected correctly or the executable name or imediate path does not contain the correct name (note to myself to verify if capitalisation is in the loop too)) that it would give an gui dialog ( like right now it does ) with two options, either 1. it will cancel out the operation, but still boot up the game ( like it is right now ) or 2. it will ask for the correct name and path of the game and it will update the data structure of ludusavi custom paths.. or.. idk
+- make a simple 1 line install script for all dependencies and configuration needed for the current system for the wrapper to be able to be used. in that install script, user should be provided with options of how to install stuff like ludusavi, like if he wants to install it in flatpak or via his package manager, etc.
