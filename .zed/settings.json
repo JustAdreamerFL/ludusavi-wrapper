@@ -1,0 +1,10 @@
+{
+    "prettier": {
+    "allowed": true
+    },
+    "formatter": {
+    "external": {
+    "command": "shfmt",
+    "arguments": ["-i", "4"]
+    }}
+}
