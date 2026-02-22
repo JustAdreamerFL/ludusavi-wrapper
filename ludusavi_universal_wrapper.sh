@@ -22,11 +22,8 @@ PING_CACHE_FILE="${XDG_CACHE_HOME:-$HOME/.cache}/ludusavi_wrapper_ping_cmd"
 # Options: "lutris", "heroic", "auto"
 LAUNCHER_TYPE="${LAUNCHER_TYPE:-auto}"
 
-# PCGamingWiki API cache directory
-WIKI_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/ludusavi_wrapper_wiki"
-
-# Track whether the game name came from a PCGamingWiki lookup
-GAME_NAME_FROM_WIKI=false
+# Track whether user chose to skip all ludusavi operations
+SKIP_LUDUSAVI=false
 
 # ============================================================================
 # HELPER FUNCTIONS
@@ -102,16 +99,122 @@ pcgamingwiki_lookup() {
   echo "$results"
 }
 
-# Show a zenity error dialog when ludusavi fails with a wiki-sourced name
-show_ludusavi_error() {
+# Try a ludusavi operation. On failure, offer a GUI dialog to either skip ludusavi
+# entirely or look up the correct name on PCGamingWiki and retry.
+#
+# Usage: run_ludusavi_op <"restore"|"backup">
+# Side effects: may update GAME_NAME and set SKIP_LUDUSAVI=true
+# Returns: 0 on success, 1 if user chose to skip, 2+ on unrecoverable error
+run_ludusavi_op() {
   local operation="$1"
-  local game_name="$2"
-  local lud_exit_code="$3"
-  if [[ "${GAME_NAME_FROM_WIKI}" == "true" ]] && [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]] && command -v zenity >/dev/null 2>&1; then
-    zenity --error --title="Ludusavi Error" \
-      --text="Ludusavi <b>${operation}</b> failed for:\n\n<b>${game_name}</b>\n\n(Name sourced from PCGamingWiki)\nExit code: ${lud_exit_code}\n\nThe game name from PCGamingWiki may not match\nwhat Ludusavi expects. You may need to add a\ncustom game entry in Ludusavi." \
-      --width=450 2>/dev/null || true
+
+  # If user already chose to skip ludusavi (e.g. during restore), honour that
+  if [[ "${SKIP_LUDUSAVI}" == "true" ]]; then
+    echo "Skipping ludusavi ${operation} (user chose to skip earlier)." >&2
+    return 1
   fi
+
+  local escaped_name
+  escaped_name=$(printf %q "${GAME_NAME}")
+
+  echo "Debug: Executing ${operation} command: ${LUDUSAVI} ${MANIFEST_UPDATE_FLAG} ${operation} --force --gui ${escaped_name}" >&2
+
+  set +e
+  eval "${LUDUSAVI}" ${MANIFEST_UPDATE_FLAG} "${operation}" --force --gui "${escaped_name}"
+  local lud_exit=$?
+  set -e
+
+  # Success on first try — nothing else to do
+  if [[ ${lud_exit} -eq 0 ]]; then
+    echo "Ludusavi ${operation} succeeded for '${GAME_NAME}'." >&2
+    return 0
+  fi
+
+  echo "Ludusavi ${operation} failed (exit code ${lud_exit}) for '${GAME_NAME}'." >&2
+
+  # If no graphical display or no zenity, we can't show a dialog — just report and return
+  if [[ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]] || ! command -v zenity >/dev/null 2>&1; then
+    echo "No display or zenity available — cannot show fallback dialog." >&2
+    return ${lud_exit}
+  fi
+
+  # ---- Failure dialog: two choices ----
+  local choice
+  choice=$(zenity --list --radiolist \
+    --title="Ludusavi ${operation} failed" \
+    --text="Ludusavi <b>${operation}</b> failed for:\n\n<b>${GAME_NAME}</b>\n(exit code: ${lud_exit})\n\nWhat would you like to do?" \
+    --column="Pick" --column="Action" \
+    TRUE  "Continue without ludusavi" \
+    FALSE "Look up on PCGamingWiki" \
+    --width=500 --height=320 2>/dev/null) || true
+
+  # ---- Choice 1: skip ludusavi ----
+  if [[ "$choice" != "Look up on PCGamingWiki" ]]; then
+    echo "User chose to continue without ludusavi." >&2
+    SKIP_LUDUSAVI=true
+    return 1
+  fi
+
+  # ---- Choice 2: PCGamingWiki lookup ----
+  echo "User requested PCGamingWiki lookup for '${GAME_NAME}'..." >&2
+
+  local wiki_results
+  wiki_results=$(pcgamingwiki_lookup "${GAME_NAME}")
+
+  if [[ -z "$wiki_results" ]]; then
+    zenity --warning --title="PCGamingWiki Lookup" \
+      --text="No results found on PCGamingWiki for:\n\n<b>${GAME_NAME}</b>\n\nContinuing without ludusavi." \
+      --width=400 2>/dev/null || true
+    echo "No PCGamingWiki results for '${GAME_NAME}'. Skipping ludusavi." >&2
+    SKIP_LUDUSAVI=true
+    return 1
+  fi
+
+  echo "PCGamingWiki returned results:" >&2
+  echo "$wiki_results" >&2
+
+  # Build zenity list arguments
+  local zenity_args=()
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && zenity_args+=("$line")
+  done <<< "$wiki_results"
+
+  local selected_name
+  selected_name=$(zenity --list \
+    --title="PCGamingWiki Results" \
+    --text="Search results for: <b>${GAME_NAME}</b>\n\nSelect the correct game name:" \
+    --column="Game Name" \
+    "${zenity_args[@]}" \
+    --width=550 --height=450 2>/dev/null) || true
+
+  if [[ -z "$selected_name" ]]; then
+    echo "User cancelled PCGamingWiki selection. Skipping ludusavi." >&2
+    SKIP_LUDUSAVI=true
+    return 1
+  fi
+
+  echo "User selected '${selected_name}' from PCGamingWiki. Retrying ${operation}..." >&2
+  GAME_NAME="$selected_name"
+  escaped_name=$(printf %q "${GAME_NAME}")
+
+  # ---- Retry with the wiki name ----
+  set +e
+  eval "${LUDUSAVI}" ${MANIFEST_UPDATE_FLAG} "${operation}" --force --gui "${escaped_name}"
+  local retry_exit=$?
+  set -e
+
+  if [[ ${retry_exit} -eq 0 ]]; then
+    echo "Ludusavi ${operation} succeeded with wiki name '${GAME_NAME}'." >&2
+    return 0
+  fi
+
+  # Retry also failed — show error dialog
+  echo "Ludusavi ${operation} still failed (exit code ${retry_exit}) with wiki name '${GAME_NAME}'." >&2
+  zenity --error --title="Ludusavi Error" \
+    --text="Ludusavi <b>${operation}</b> still failed after PCGamingWiki lookup.\n\nGame name: <b>${GAME_NAME}</b>\nExit code: ${retry_exit}\n\nThe name from PCGamingWiki may not match what\nLudusavi expects. You may need to add a custom\ngame entry in Ludusavi.\n\nContinuing without ludusavi." \
+    --width=450 2>/dev/null || true
+  SKIP_LUDUSAVI=true
+  return ${retry_exit}
 }
 
 # ============================================================================
@@ -299,62 +402,6 @@ if [[ "${GAME_NAME}" != "${GAME_NAME_ORIGINAL}" ]]; then
   echo "Stripped leading non-alphanumeric characters from game name: '${GAME_NAME_ORIGINAL}' -> '${GAME_NAME}'" >&2
 fi
 
-# ============================================================================
-# GUI confirmation dialog with PCGamingWiki lookup option
-# ============================================================================
-# Only show when:
-#   - A graphical display is available (X11 or Wayland)
-#   - zenity is installed
-#   - The game name was NOT explicitly passed via --game-name= (user already knows it)
-if [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]] && command -v zenity >/dev/null 2>&1 && [[ -z "${GAME_NAME_ARG}" ]]; then
-
-  # Show confirmation dialog with two choices
-  if ! zenity --question --title="Ludusavi Wrapper - Confirm Game Name" \
-    --text="Detected game name:\n\n<b>${GAME_NAME}</b>\n\nIs this correct?" \
-    --ok-label="Yes, continue" \
-    --cancel-label="Look up on PCGamingWiki" \
-    --width=420 2>/dev/null; then
-
-    # User chose "Look up on PCGamingWiki"
-    echo "User requested PCGamingWiki lookup for '${GAME_NAME}'..." >&2
-
-    WIKI_RESULTS=$(pcgamingwiki_lookup "${GAME_NAME}")
-
-    if [[ -n "$WIKI_RESULTS" ]]; then
-      echo "PCGamingWiki returned results:" >&2
-      echo "$WIKI_RESULTS" >&2
-
-      # Build zenity list arguments from the results
-      ZENITY_LIST_ARGS=()
-      while IFS= read -r line; do
-        [[ -n "$line" ]] && ZENITY_LIST_ARGS+=("$line")
-      done <<< "$WIKI_RESULTS"
-
-      SELECTED_NAME=$(zenity --list \
-        --title="PCGamingWiki Results" \
-        --text="Search results for: <b>${GAME_NAME}</b>\n\nSelect the correct game name:" \
-        --column="Game Name" \
-        "${ZENITY_LIST_ARGS[@]}" \
-        --width=550 --height=450 2>/dev/null) || true
-
-      if [[ -n "$SELECTED_NAME" ]]; then
-        echo "User selected game name from PCGamingWiki: '${SELECTED_NAME}'" >&2
-        GAME_NAME="$SELECTED_NAME"
-        GAME_NAME_FROM_WIKI=true
-      else
-        echo "User cancelled selection, continuing with detected name: '${GAME_NAME}'" >&2
-      fi
-    else
-      zenity --warning --title="PCGamingWiki Lookup" \
-        --text="No results found on PCGamingWiki for:\n\n<b>${GAME_NAME}</b>\n\nContinuing with the detected name." \
-        --width=400 2>/dev/null || true
-      echo "No PCGamingWiki results found for '${GAME_NAME}'" >&2
-    fi
-  else
-    echo "User confirmed game name: '${GAME_NAME}'" >&2
-  fi
-fi
-
 echo "========================================"
 echo "Ludusavi Wrapper for ${GAME_NAME}"
 echo "========================================"
@@ -420,20 +467,20 @@ if [[ "$MODE" == "pre" ]]; then
   fi
   echo "Running in PRE-LAUNCH mode: restoring saves only..." >&2
 
-  # Escape game name for eval
-  ESCAPED_GAME_NAME=$(printf %q "${GAME_NAME}")
+  run_ludusavi_op "restore"
+  op_result=$?
 
-  echo "Debug: Executing restore command: ${LUDUSAVI} ${MANIFEST_UPDATE_FLAG} restore --force --gui ${ESCAPED_GAME_NAME}" >&2
-  eval "${LUDUSAVI}" ${MANIFEST_UPDATE_FLAG} restore --force --gui ${ESCAPED_GAME_NAME}
-  exit_code=$?
-  if [[ -z "${exit_code:-}" ]]; then exit_code=0; fi
-  if [[ ${exit_code} -ne 0 ]]; then
-    show_ludusavi_error "restore" "${GAME_NAME}" "${exit_code}"
+  echo "========================================"
+  if [[ ${op_result} -eq 0 ]]; then
+    echo "Ludusavi restore completed successfully."
+  elif [[ ${op_result} -eq 1 ]]; then
+    echo "Ludusavi restore skipped by user."
+  else
+    echo "Ludusavi restore failed (exit code: ${op_result})."
   fi
   echo "========================================"
-  echo "Ludusavi restore completed with code: ${exit_code}"
-  echo "========================================"
-  exit ${exit_code}
+  exit 0
+
 elif [[ "$MODE" == "post" ]]; then
   if [[ -z "${GAME_NAME}" ]]; then
     echo "Error: GAME_NAME is empty. Set --game-name= or ensure LUTRIS_GAME_NAME is set." >&2
@@ -441,35 +488,33 @@ elif [[ "$MODE" == "post" ]]; then
   fi
   echo "Running in POST-LAUNCH mode: backing up saves only..." >&2
 
-  # Escape game name for eval
-  ESCAPED_GAME_NAME=$(printf %q "${GAME_NAME}")
+  run_ludusavi_op "backup"
+  op_result=$?
 
-  echo "Debug: Executing backup command: ${LUDUSAVI} ${MANIFEST_UPDATE_FLAG} backup --force --gui ${ESCAPED_GAME_NAME}" >&2
-  eval "${LUDUSAVI}" ${MANIFEST_UPDATE_FLAG} backup --force --gui ${ESCAPED_GAME_NAME}
-  exit_code=$?
-  if [[ -z "${exit_code:-}" ]]; then exit_code=0; fi
-  if [[ ${exit_code} -ne 0 ]]; then
-    show_ludusavi_error "backup" "${GAME_NAME}" "${exit_code}"
+  echo "========================================"
+  if [[ ${op_result} -eq 0 ]]; then
+    echo "Ludusavi backup completed successfully."
+  elif [[ ${op_result} -eq 1 ]]; then
+    echo "Ludusavi backup skipped by user."
+  else
+    echo "Ludusavi backup failed (exit code: ${op_result})."
   fi
   echo "========================================"
-  echo "Ludusavi backup completed with code: ${exit_code}"
-  echo "========================================"
-  exit ${exit_code}
+  exit 0
+
 else
   # Wrapper mode: restore, run game, backup
 
-  # Escape game name for eval
-  ESCAPED_GAME_NAME=$(printf %q "${GAME_NAME}")
+  # 1. Restore (failure here does not prevent game launch)
+  run_ludusavi_op "restore"
+  restore_result=$?
 
-  # 1. Restore
-  echo "Debug: Executing restore command: ${LUDUSAVI} ${MANIFEST_UPDATE_FLAG} restore --force --gui ${ESCAPED_GAME_NAME}" >&2
-  # Allow restore to fail (e.g. no backups yet) without stopping the game launch
-  set +e
-  eval "${LUDUSAVI}" ${MANIFEST_UPDATE_FLAG} restore --force --gui ${ESCAPED_GAME_NAME}
-  restore_exit=$?
-  set -e
-  if [[ ${restore_exit} -ne 0 ]]; then
-    show_ludusavi_error "restore" "${GAME_NAME}" "${restore_exit}"
+  if [[ ${restore_result} -eq 0 ]]; then
+    echo "Restore completed successfully." >&2
+  elif [[ ${restore_result} -eq 1 ]]; then
+    echo "Restore skipped by user." >&2
+  else
+    echo "Restore failed (exit code: ${restore_result}), launching game anyway." >&2
   fi
 
   # 2. Run Game
@@ -491,17 +536,17 @@ else
   echo "========================================"
   echo "Game exited with code: ${exit_code}"
 
-  # 3. Backup
-  echo "Debug: Executing backup command: ${LUDUSAVI} ${MANIFEST_UPDATE_FLAG} backup --force --gui ${ESCAPED_GAME_NAME}" >&2
-  set +e
-  eval "${LUDUSAVI}" ${MANIFEST_UPDATE_FLAG} backup --force --gui ${ESCAPED_GAME_NAME}
-  backup_exit=$?
-  set -e
-  if [[ ${backup_exit} -ne 0 ]]; then
-    show_ludusavi_error "backup" "${GAME_NAME}" "${backup_exit}"
-  fi
+  # 3. Backup (uses SKIP_LUDUSAVI flag set during restore if user chose to skip)
+  run_ludusavi_op "backup"
+  backup_result=$?
 
-  echo "Backup completed!"
+  if [[ ${backup_result} -eq 0 ]]; then
+    echo "Backup completed!"
+  elif [[ ${backup_result} -eq 1 ]]; then
+    echo "Backup skipped."
+  else
+    echo "Backup failed (exit code: ${backup_result})."
+  fi
   echo "========================================"
   exit ${exit_code}
 fi
