@@ -37,11 +37,27 @@ url_encode() {
   local string="$1"
   if command -v jq >/dev/null 2>&1; then
     jq -rn --arg s "$string" '$s|@uri'
-  elif command -v python3 >/dev/null 2>&1; then
-    python3 -c "import urllib.parse; print(urllib.parse.quote('$string'))"
+  elif command -v curl >/dev/null 2>&1; then
+    # Use curl's --data-urlencode with a dummy request to encode the string
+    curl -s -o /dev/null -w '%{url_effective}' --get --data-urlencode "q=$string" "" 2>/dev/null | sed 's/^.*?q=//' | sed 's/&.*$//'
   else
-    # Basic fallback: replace spaces with %20 (won't handle all special chars)
-    echo "$string" | sed 's/ /%20/g'
+    # Pure bash/sed fallback: encode the most common special characters
+    echo "$string" | sed \
+      -e 's/%/%25/g' \
+      -e 's/ /%20/g' \
+      -e 's/:/%3A/g' \
+      -e 's/!/%21/g' \
+      -e "s/'/%27/g" \
+      -e 's/(/%28/g' \
+      -e 's/)/%29/g' \
+      -e 's/&/%26/g' \
+      -e 's/+/%2B/g' \
+      -e 's/,/%2C/g' \
+      -e 's/;/%3B/g' \
+      -e 's/=/%3D/g' \
+      -e 's/?/%3F/g' \
+      -e 's/@/%40/g' \
+      -e 's/#/%23/g'
   fi
 }
 
@@ -61,8 +77,10 @@ pcgamingwiki_lookup() {
   if [[ -n "$response" ]]; then
     if command -v jq >/dev/null 2>&1; then
       results=$(echo "$response" | jq -r '.[1][]' 2>/dev/null)
-    elif command -v python3 >/dev/null 2>&1; then
-      results=$(echo "$response" | python3 -c "import sys,json; [print(t) for t in json.load(sys.stdin)[1]]" 2>/dev/null)
+    else
+      # Fallback: opensearch returns ["term",["Title1","Title2",...],...]
+      # Extract the second JSON array and pull out quoted strings
+      results=$(echo "$response" | sed 's/.*\["\([^]]*\)"\].*/\1/' | grep -oP '(?<=")[^"]+(?=")' 2>/dev/null | head -10)
     fi
   fi
 
@@ -74,8 +92,9 @@ pcgamingwiki_lookup() {
     if [[ -n "$response" ]]; then
       if command -v jq >/dev/null 2>&1; then
         results=$(echo "$response" | jq -r '.query.search[].title' 2>/dev/null)
-      elif command -v python3 >/dev/null 2>&1; then
-        results=$(echo "$response" | python3 -c "import sys,json; [print(r['title']) for r in json.load(sys.stdin)['query']['search']]" 2>/dev/null)
+      else
+        # Fallback: extract "title":"Value" pairs from the JSON response
+        results=$(echo "$response" | grep -oP '"title"\s*:\s*"\K[^"]+' 2>/dev/null | head -10)
       fi
     fi
   fi
