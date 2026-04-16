@@ -1,3 +1,6 @@
+# READ FIRST
+This project was a fun "slop-vibe-code" test/experience. In it current state it's somewhat usable, try it if you want but it is a slop. 
+
 # Ludusavi Universal Wrapper (for mac/Linux)
 - windows version is seperate, and i didnt make it as of now
 
